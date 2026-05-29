@@ -10,11 +10,12 @@ Interview concepts:
   - Why overlap? Prevents losing context at chunk boundaries.
   - RecursiveCharacterTextSplitter splits at natural boundaries (paragraphs → sentences → words).
 """
-
+import re
 import fitz  # PyMuPDF — imported as 'fitz' for historical reasons
 from pathlib import Path
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from .config import PAPERS_DIR, CHUNK_SIZE, CHUNK_OVERLAP
+
 
 
 def extract_text_from_pdf(pdf_path: Path) -> list[dict]:
@@ -44,41 +45,98 @@ def extract_text_from_pdf(pdf_path: Path) -> list[dict]:
     return pages
 
 
+def split_into_sentences(text: str) -> list[str]:
+    """
+    Split page text into individual sentences.
+    Robustly handles common academic abbreviations (e.g., et al., i.e., vs.)
+    so sentences are not incorrectly fragmented.
+    """
+    # Replace multiple spaces and newlines with a single space
+    clean_text = re.sub(r"\s+", " ", text).strip()
+    
+    # List of common academic and general abbreviations
+    abbreviations = [
+        "e.g.", "i.e.", "et al.", "al.", "vs.", "fig.", "eq.", "vol.", 
+        "dept.", "univ.", "dr.", "mr.", "mrs.", "ms."
+    ]
+    
+    # Temporarily hide dots inside abbreviations to prevent false sentence splits
+    placeholder_text = clean_text
+    for abbr in abbreviations:
+        pattern = re.compile(re.escape(abbr), re.IGNORECASE)
+        placeholder_abbr = abbr.replace(".", "<DOT>")
+        placeholder_text = pattern.sub(placeholder_abbr, placeholder_text)
+        
+    # Split at period, question mark, or exclamation followed by a space and an uppercase character/number
+    # (fixed-width look-behind is fully supported in Python's standard re module)
+    sentence_end = r"(?<=\.|\?|!)\s+(?=[A-Z0-9])"
+    sentences = re.split(sentence_end, placeholder_text)
+    
+    # Restore the dots in the final split sentences
+    restored_sentences = []
+    for s in sentences:
+        s_clean = s.replace("<DOT>", ".").strip()
+        if s_clean:
+            restored_sentences.append(s_clean)
+            
+    return restored_sentences
+
+
 def chunk_documents(pages: list[dict]) -> list[dict]:
     """
-    Split extracted pages into overlapping chunks with metadata.
-
-    Uses RecursiveCharacterTextSplitter which tries to split at
-    natural text boundaries in this priority order:
-      1. Double newlines (paragraphs)
-      2. Single newlines
-      3. Periods followed by space (sentences)
-      4. Spaces (words)
-      5. Characters (last resort)
-
-    Args:
-        pages: List of page dicts from extract_text_from_pdf()
-
-    Returns:
-        List of chunk dicts with keys: text, metadata
+    Split extracted pages into:
+      1. Parent-Child Chunks (for Parent-Document Retrieval)
+      2. Individual Sentence Chunks (for Sentence Window Retrieval)
+      
+    Both chunk styles are written into ChromaDB with a 'chunk_type' key 
+    in metadata, allowing search mode toggling at runtime.
     """
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
+    parent_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,          # Parent chunk size (~250 tokens)
+        chunk_overlap=200,         # 20% overlap
         separators=["\n\n", "\n", ". ", " ", ""],
-        length_function=len,  # Count characters (not tokens)
+    )
+    
+    child_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=300,           # Child chunk size (~75 tokens)
+        chunk_overlap=50,          # 15-20% overlap
+        separators=["\n\n", "\n", ". ", " ", ""],
     )
 
     chunks = []
     for page in pages:
-        splits = splitter.split_text(page["text"])
-        for i, split_text in enumerate(splits):
+        # ─── Strategy 1: Parent-Child Chunking ───
+        # 1. Split page into large Parent Chunks
+        parent_splits = parent_splitter.split_text(page["text"])
+        
+        for parent_idx, parent_text in enumerate(parent_splits):
+            # 2. Split each Parent Chunk into smaller Child Chunks
+            child_splits = child_splitter.split_text(parent_text)
+            
+            for child_idx, child_text in enumerate(child_splits):
+                chunks.append({
+                    "text": child_text,  # We embed and search the small child text
+                    "metadata": {
+                        "chunk_type": "child",
+                        "source": page["source"],
+                        "page": page["page"],
+                        "parent_text": parent_text,  # Store full parent paragraph in metadata
+                        "chunk_index": f"{parent_idx}_{child_idx}",
+                    },
+                })
+
+        # ─── Strategy 2: Sentence Window Chunking ───
+        # Split page into clean individual sentences
+        page_sentences = split_into_sentences(page["text"])
+        
+        for idx, sentence_text in enumerate(page_sentences):
             chunks.append({
-                "text": split_text,
+                "text": sentence_text,  # We embed and search the single sentence
                 "metadata": {
+                    "chunk_type": "sentence",
                     "source": page["source"],
                     "page": page["page"],
-                    "chunk_index": i,
+                    "sentence_index": idx,  # Store sequence index for neighboring lookup
                 },
             })
 

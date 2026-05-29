@@ -56,5 +56,12 @@ CHUNK_OVERLAP = 200
 #   5 gives a good balance of coverage vs. noise
 TOP_K = 5
 
+# Default search strategy ("parent_document" or "sentence_window")
+RETRIEVAL_STRATEGY = "parent_document"
+
+# Number of sentences to retrieve before and after the target sentence
+SENTENCE_WINDOW_SIZE = 2
+
 # ── ChromaDB ─────────────────────────────────────────────────────────────
 COLLECTION_NAME = "research_papers"
+

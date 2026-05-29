@@ -12,7 +12,7 @@ Interview concepts:
 """
 
 import chromadb
-from .config import CHROMA_DIR, COLLECTION_NAME
+from .config import CHROMA_DIR, COLLECTION_NAME, RETRIEVAL_STRATEGY, SENTENCE_WINDOW_SIZE
 from .embeddings import embed_texts, embed_query
 
 
@@ -54,11 +54,17 @@ def add_documents(chunks: list[dict]) -> int:
     texts = [c["text"] for c in chunks]
     metadatas = [c["metadata"] for c in chunks]
 
-    # Create unique IDs for each chunk: "filename_page_chunkindex"
-    ids = [
-        f"{c['metadata']['source']}_{c['metadata']['page']}_{c['metadata']['chunk_index']}"
-        for c in chunks
-    ]
+    # Create unique IDs for each chunk: "filename_page_suffix"
+    # Suffix is sent_index for sentences and child_index for parent-child chunks
+    ids = []
+    for c in chunks:
+        source = c["metadata"]["source"]
+        page = c["metadata"]["page"]
+        if c["metadata"].get("chunk_type") == "sentence":
+            suffix = f"sent_{c['metadata']['sentence_index']}"
+        else:
+            suffix = f"child_{c['metadata'].get('chunk_index', '0')}"
+        ids.append(f"{source}_{page}_{suffix}")
 
     # Generate embeddings using Gemini API
     print(f"[EMBED] Generating embeddings for {len(texts)} chunks...")
@@ -80,22 +86,32 @@ def add_documents(chunks: list[dict]) -> int:
     return len(texts)
 
 
-def search(query: str, top_k: int = 5, papers_filter: list[str] = None) -> list[dict]:
+def search(
+    query: str,
+    top_k: int = 5,
+    papers_filter: list[str] = None,
+    strategy: str = None,
+    window_size: int = None
+) -> list[dict]:
     """
-    Search for the most relevant chunks given a question.
-
-    Pipeline:
-      query → embed → cosine similarity search → top-K results
+    Search for the most relevant chunks given a question using the active strategy.
 
     Args:
       query: The user's question
       top_k: Number of most-relevant chunks to return
       papers_filter: List of source PDF filenames to restrict the search to
+      strategy: "parent_document" or "sentence_window" (defaults to config)
+      window_size: Sentence window size for sentence_window strategy (defaults to config)
 
     Returns:
         List of dicts with keys: text, metadata, score
         Sorted by relevance (highest score first)
     """
+    if strategy is None:
+        strategy = RETRIEVAL_STRATEGY
+    if window_size is None:
+        window_size = SENTENCE_WINDOW_SIZE
+
     collection = get_collection()
 
     # Check if collection has any documents
@@ -105,13 +121,18 @@ def search(query: str, top_k: int = 5, papers_filter: list[str] = None) -> list[
     # Embed the query (using RETRIEVAL_QUERY task type)
     query_embedding = embed_query(query)
 
-    # Construct metadata filter if papers_filter is provided
-    filter_dict = None
+    # Determine chunk type filter
+    chunk_type_filter = "child" if strategy == "parent_document" else "sentence"
+
+    # Construct composite filter_dict using $and
+    conditions = [{"chunk_type": chunk_type_filter}]
     if papers_filter:
         if len(papers_filter) == 1:
-            filter_dict = {"source": papers_filter[0]}
+            conditions.append({"source": papers_filter[0]})
         else:
-            filter_dict = {"source": {"$in": papers_filter}}
+            conditions.append({"source": {"$in": papers_filter}})
+            
+    filter_dict = conditions[0] if len(conditions) == 1 else {"$and": conditions}
 
     # 1. Retrieve Dense (Vector) Results
     # Fetch top_k * 2 to give reranker more options to optimize
@@ -148,12 +169,57 @@ def search(query: str, top_k: int = 5, papers_filter: list[str] = None) -> list[
     rrf_scores = {}
     doc_lookup = {}
 
+    def get_doc_id(meta: dict) -> str:
+        source = meta["source"]
+        page = meta["page"]
+        if meta.get("chunk_type") == "sentence":
+            suffix = f"sent_{meta['sentence_index']}"
+        else:
+            suffix = f"child_{meta.get('chunk_index', '0')}"
+        return f"{source}_{page}_{suffix}"
+
+    def reconstruct_context(doc: str, meta: dict) -> str:
+        if strategy == "sentence_window":
+            # Reconstruct sentence window using neighboring lookup
+            source = meta["source"]
+            page = meta["page"]
+            target_idx = int(meta["sentence_index"])
+            min_idx = max(0, target_idx - window_size)
+            max_idx = target_idx + window_size
+            
+            try:
+                window_res = collection.get(
+                    where={
+                        "$and": [
+                            {"source": source},
+                            {"page": page},
+                            {"chunk_type": "sentence"},
+                            {"sentence_index": {"$gte": min_idx}},
+                            {"sentence_index": {"$lte": max_idx}}
+                        ]
+                    },
+                    include=["documents", "metadatas"]
+                )
+                if window_res and window_res["documents"]:
+                    # Sort sentences by their original sequence index
+                    sorted_sents = sorted(
+                        zip(window_res["documents"], window_res["metadatas"]),
+                        key=lambda x: int(x[1]["sentence_index"])
+                    )
+                    return " ".join([s[0] for s in sorted_sents])
+            except Exception as e:
+                print(f"[WARNING] Sentence window reconstruction failed: {e}")
+                return doc
+        else:
+            # Fall back to parent-chunk retrieval
+            return meta.get("parent_text", doc)
+
     # Score Dense Results
     if dense_results and dense_results["documents"] and dense_results["documents"][0]:
         for rank, (doc, meta, dist) in enumerate(zip(dense_results["documents"][0], dense_results["metadatas"][0], dense_results["distances"][0])):
-            doc_id = f"{meta['source']}_{meta['page']}_{meta['chunk_index']}"
+            doc_id = get_doc_id(meta)
             doc_lookup[doc_id] = {
-                "text": doc,
+                "text": reconstruct_context(doc, meta),
                 "metadata": meta,
                 "score": round(1 - dist, 4)
             }
@@ -163,13 +229,13 @@ def search(query: str, top_k: int = 5, papers_filter: list[str] = None) -> list[
     # Score Sparse Results
     seen_sparse_ids = set()
     for rank, (doc, meta) in enumerate(sparse_results):
-        doc_id = f"{meta['source']}_{meta['page']}_{meta['chunk_index']}"
+        doc_id = get_doc_id(meta)
         if doc_id not in seen_sparse_ids:
             seen_sparse_ids.add(doc_id)
             if doc_id not in doc_lookup:
                 # We give keyword-only matches a base semantic relevance score of 0.6
                 doc_lookup[doc_id] = {
-                    "text": doc,
+                    "text": reconstruct_context(doc, meta),
                     "metadata": meta,
                     "score": 0.6000
                 }
@@ -184,6 +250,7 @@ def search(query: str, top_k: int = 5, papers_filter: list[str] = None) -> list[
         formatted.append(doc_lookup[doc_id])
 
     return formatted
+
 
 
 def get_stats() -> dict:

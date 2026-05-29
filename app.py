@@ -300,6 +300,27 @@ with st.sidebar:
     )
 
     st.markdown("---")
+    st.markdown("### 🔍 Retrieval Strategy")
+    
+    retrieval_mode = st.selectbox(
+        "Retrieval Mode",
+        options=["Parent-Document", "Sentence Window"],
+        index=0,
+        help="Parent-Document: retrieves full parent paragraph containing child.\nSentence Window: retrieves sentence + surrounding window."
+    )
+    strategy = "parent_document" if retrieval_mode == "Parent-Document" else "sentence_window"
+    
+    window_size = 2
+    if strategy == "sentence_window":
+        window_size = st.slider(
+            "Sentence Window Size",
+            min_value=1,
+            max_value=5,
+            value=2,
+            help="Sentences to retrieve before and after target sentence"
+        )
+
+    st.markdown("---")
 
     # Clear database
     if st.button("🗑️ Clear Database", use_container_width=True):
@@ -417,7 +438,9 @@ with col_chat:
                     user_question,
                     chat_history=st.session_state.chat_history,
                     top_k=top_k,
-                    papers_filter=papers_filter
+                    papers_filter=papers_filter,
+                    strategy=strategy,
+                    window_size=window_size
                 )
                 elapsed = time.time() - start_time
 

@@ -72,7 +72,14 @@ def ingest_single_paper(pdf_path: Path) -> dict:
     }
 
 
-def query(question: str, chat_history: list = None, top_k: int = None, papers_filter: list = None) -> dict:
+def query(
+    question: str,
+    chat_history: list = None,
+    top_k: int = None,
+    papers_filter: list = None,
+    strategy: str = None,
+    window_size: int = None
+) -> dict:
     """
     Full RAG pipeline: Question → Cited Answer with Conversational Memory and Filtering.
 
@@ -89,6 +96,8 @@ def query(question: str, chat_history: list = None, top_k: int = None, papers_fi
         chat_history: Streamlit session chat history for query condensation
         top_k: Number of chunks to retrieve (defaults to config)
         papers_filter: List of PDF filenames to restrict retrieval to
+        strategy: "parent_document" or "sentence_window" (defaults to config)
+        window_size: Sentence window size for sentence_window strategy (defaults to config)
 
     Returns:
         Dict with keys:
@@ -132,10 +141,22 @@ def query(question: str, chat_history: list = None, top_k: int = None, papers_fi
 
         # If abstract chunks couldn't be loaded, fall back to standard search
         if not retrieved_chunks:
-            retrieved_chunks = search(search_query, top_k=top_k * 2, papers_filter=route["target_papers"])
+            retrieved_chunks = search(
+                search_query,
+                top_k=top_k * 2,
+                papers_filter=route["target_papers"],
+                strategy=strategy,
+                window_size=window_size
+            )
     else:
         # Standard Search Strategy: Retrieve double chunks for reranking
-        retrieved_chunks = search(search_query, top_k=top_k * 2, papers_filter=papers_filter)
+        retrieved_chunks = search(
+            search_query,
+            top_k=top_k * 2,
+            papers_filter=papers_filter,
+            strategy=strategy,
+            window_size=window_size
+        )
 
     # Phase 4: Semantic Reranking (LLM-based)
     if route["strategy"] == "search" and len(retrieved_chunks) > top_k:
