@@ -444,64 +444,80 @@ with col_chat:
         with st.chat_message("assistant", avatar="🔬"):
             with st.spinner("🔍 Searching papers and generating answer..."):
                 start_time = time.time()
-                result = query(
-                    user_question,
-                    chat_history=st.session_state.chat_history,
-                    top_k=top_k,
-                    papers_filter=papers_filter,
-                    strategy=strategy,
-                    window_size=window_size
-                )
-                elapsed = time.time() - start_time
+                try:
+                    result = query(
+                        user_question,
+                        chat_history=st.session_state.chat_history,
+                        top_k=top_k,
+                        papers_filter=papers_filter,
+                        strategy=strategy,
+                        window_size=window_size
+                    )
+                    elapsed = time.time() - start_time
+                    
+                    # Display answer
+                    st.markdown(result["answer"])
+                    st.caption(f"⏱️ Response generated in {elapsed:.1f}s")
 
-            # Display answer
-            st.markdown(result["answer"])
-            st.caption(f"⏱️ Response generated in {elapsed:.1f}s")
+                    # Source citations
+                    if result["sources"]:
+                        with st.expander(f"📎 Sources ({len(result['sources'])} references)", expanded=True):
+                            for idx, src in enumerate(result["sources"]):
+                                st.markdown(
+                                    f"""<div class="source-card">
+                                        <span class="paper-name">📄 {src['paper']}</span>
+                                        <span class="page-info"> · Page {src['page']} · Relevance: {src['relevance']:.1%}</span>
+                                    </div>""",
+                                    unsafe_allow_html=True,
+                                )
+                                # Add Page Preview Button
+                                pdf_filename = f"{src['paper']}.pdf"
+                                st.button(
+                                    f"🔍 View Page {src['page']}",
+                                    key=f"btn_act_{src['paper']}_{src['page']}_{idx}",
+                                    on_click=select_page,
+                                    args=(pdf_filename, src["page"]),
+                                    use_container_width=True
+                                )
 
-            # Source citations
-            if result["sources"]:
-                with st.expander(f"📎 Sources ({len(result['sources'])} references)", expanded=True):
-                    for idx, src in enumerate(result["sources"]):
-                        st.markdown(
-                            f"""<div class="source-card">
-                                <span class="paper-name">📄 {src['paper']}</span>
-                                <span class="page-info"> · Page {src['page']} · Relevance: {src['relevance']:.1%}</span>
-                            </div>""",
-                            unsafe_allow_html=True,
+                    # Retrieved chunks
+                    if result["chunks"]:
+                        with st.expander("🔍 Retrieved Chunks (Debug View)", expanded=False):
+                            for i, chunk in enumerate(result["chunks"], 1):
+                                source = chunk["metadata"]["source"].replace(".pdf", "")
+                                page = chunk["metadata"]["page"]
+                                score = chunk.get("score", 0)
+                                st.markdown(
+                                    f"""<div class="chunk-preview">
+                                        <strong>Chunk {i}</strong> · {source}, Page {page} · Score: {score:.4f}<br>
+                                        {chunk['text'][:300]}{'...' if len(chunk['text']) > 300 else ''}
+                                    </div>""",
+                                    unsafe_allow_html=True,
+                                )
+
+                    # Save to chat history
+                    st.session_state.chat_history.append({
+                        "question": user_question,
+                        "answer": result["answer"],
+                        "sources": result["sources"],
+                        "chunks": result["chunks"],
+                    })
+                    st.rerun()
+
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "quota" in err_str or "429" in err_str or "resource_exhausted" in err_str:
+                        st.error(
+                            "🛑 **Gemini API Daily Generation Quota Exhausted!** \n\n"
+                            "You have reached Google's free-tier limit of **20 generation requests per day** on your API key. \n\n"
+                            "👉 **How to fix this instantly:**\n"
+                            "1. Go to [Google AI Studio](https://aistudio.google.com/apikey) (using a different Google account) and create a new free API key.\n"
+                            "2. Replace the `GOOGLE_API_KEY` in your `.env` file with the new key.\n"
+                            "3. Reload this page in your browser and resume chatting!\n\n"
+                            "*Note: Our local database and 639 indexed chunks are perfectly preserved!*"
                         )
-                        # Add Page Preview Button
-                        pdf_filename = f"{src['paper']}.pdf"
-                        st.button(
-                            f"🔍 View Page {src['page']}",
-                            key=f"btn_act_{src['paper']}_{src['page']}_{idx}",
-                            on_click=select_page,
-                            args=(pdf_filename, src["page"]),
-                            use_container_width=True
-                        )
-
-            # Retrieved chunks
-            if result["chunks"]:
-                with st.expander("🔍 Retrieved Chunks (Debug View)", expanded=False):
-                    for i, chunk in enumerate(result["chunks"], 1):
-                        source = chunk["metadata"]["source"].replace(".pdf", "")
-                        page = chunk["metadata"]["page"]
-                        score = chunk.get("score", 0)
-                        st.markdown(
-                            f"""<div class="chunk-preview">
-                                <strong>Chunk {i}</strong> · {source}, Page {page} · Score: {score:.4f}<br>
-                                {chunk['text'][:300]}{'...' if len(chunk['text']) > 300 else ''}
-                            </div>""",
-                            unsafe_allow_html=True,
-                        )
-
-        # Save to chat history
-        st.session_state.chat_history.append({
-            "question": user_question,
-            "answer": result["answer"],
-            "sources": result["sources"],
-            "chunks": result["chunks"],
-        })
-        st.rerun()
+                    else:
+                        st.error(f"❌ Generation failed: {e}")
 
 # ── Render PDF Page Previewer (Side-by-side) ─────────────────────────────
 if has_preview and col_preview is not None:
