@@ -304,20 +304,30 @@ with st.sidebar:
     
     retrieval_mode = st.selectbox(
         "Retrieval Mode",
-        options=["Parent-Document", "Sentence Window"],
+        options=["Auto-Detect (Recommended)", "Deep Context (Paragraphs)", "Focus Mode (Sentences)"],
         index=0,
-        help="Parent-Document: retrieves full parent paragraph containing child.\nSentence Window: retrieves sentence + surrounding window."
+        help=(
+            "Auto-Detect: Automatically picks the best mode depending on your question.\n\n"
+            "Deep Context (Paragraphs): Retrieves complete paragraphs around matching text. Ideal for understanding 'Why' or 'How' concepts.\n\n"
+            "Focus Mode (Sentences): Retrieves exact matching sentences and their immediate surrounding lines. Ideal for specific facts, values, or metrics."
+        )
     )
-    strategy = "parent_document" if retrieval_mode == "Parent-Document" else "sentence_window"
+    
+    if retrieval_mode == "Auto-Detect (Recommended)":
+        strategy = "auto"
+    elif retrieval_mode == "Deep Context (Paragraphs)":
+        strategy = "parent_document"
+    else:
+        strategy = "sentence_window"
     
     window_size = 2
-    if strategy == "sentence_window":
+    if strategy == "sentence_window" or strategy == "auto":
         window_size = st.slider(
-            "Sentence Window Size",
+            "Context Window Size",
             min_value=1,
             max_value=5,
             value=2,
-            help="Sentences to retrieve before and after target sentence"
+            help="Number of sentences to pull around the matching text for extra context."
         )
 
     st.markdown("---")

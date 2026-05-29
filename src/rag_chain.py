@@ -108,6 +108,21 @@ def query(
     if top_k is None:
         top_k = TOP_K
 
+    # Smart, zero-latency dynamic classification for Auto-Detect mode
+    if strategy == "auto" or strategy is None:
+        from .config import RETRIEVAL_STRATEGY
+        target_strategy = strategy if strategy else RETRIEVAL_STRATEGY
+        if target_strategy == "auto" or target_strategy is None:
+            question_lower = question.lower()
+            # Conceptual words that typically need paragraph context to explain
+            conceptual_keywords = ["why", "how", "explain", "compare", "difference", "concept", "describe", "relation", "novelty", "advantage"]
+            if any(kw in question_lower for kw in conceptual_keywords):
+                strategy = "parent_document"
+                print("[AUTO RETRIEVAL] Conceptual query detected. Selecting 'Deep Context (Paragraphs)' mode.")
+            else:
+                strategy = "sentence_window"
+                print("[AUTO RETRIEVAL] Fact-based query detected. Selecting 'Focus Mode (Sentences)' mode.")
+
     # Step 0: Conversational Memory (Query Condensation)
     search_query = question
     if chat_history and len(chat_history) > 0:
