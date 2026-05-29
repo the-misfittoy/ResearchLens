@@ -1,0 +1,17 @@
+# PDF Processing
+PyMuPDF>=1.25.0                # PDF text extraction (import as 'fitz')
+
+# Text Chunking
+langchain-text-splitters>=0.3.0 # Smart text splitting with overlap
+
+# Vector Store
+chromadb>=0.6.0                 # Lightweight persistent vector database
+
+# Google Gemini (Embeddings + LLM)
+google-genai>=1.10.0            # Gemini API SDK (embeddings + generation)
+
+# Frontend
+streamlit>=1.40.0               # Web UI framework
+
+# Utilities
+python-dotenv>=1.0.0            # Load .env files
