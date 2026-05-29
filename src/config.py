@@ -36,11 +36,11 @@ EMBEDDING_MODEL = "gemini-embedding-001"
 EMBEDDING_DIMENSION = 3072
 
 # ── LLM (Large Language Model) ──────────────────────────────────────────
-# gemini-1.5-flash: Extremely fast, capable, generous 1,500 requests/day free tier
+# gemini-2.0-flash: Extremely fast, highly capable, generous 1,500 requests/day free tier
 # - Temperature 0.3: Mostly deterministic but allows some natural variation
 #   (0 = robotic, 1 = creative/unpredictable)
 # - Max tokens 2048: Enough for detailed answers with citations
-LLM_MODEL = "gemini-1.5-flash"
+LLM_MODEL = "gemini-2.0-flash"
 LLM_TEMPERATURE = 0.3
 LLM_MAX_TOKENS = 2048
 
